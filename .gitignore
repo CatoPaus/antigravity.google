@@ -1,0 +1,7 @@
+# Temporary and backup files
+*.bak
+*.part
+*.part.*
+*.tmp
+*.log
+.DS_Store
