@@ -216,7 +216,7 @@ run_verification() {
     path_ok=false
   fi
   if [ -d "$USER_HOME/.local/bin" ] && [[ ":$PATH:" != *":$USER_HOME/.local/bin:"* ]] && [[ ":$PATH:" != *":~/.local/bin:"* ]]; then
-    warn "$USER_HOME/.local/bin exists but is not in current PATH"
+    warn "$USER_HOME/.local/bin exists but is not in current PATH (run: source ~/.bashrc or open a new terminal)"
     path_ok=false
   fi
   if [ "$path_ok" = true ]; then
