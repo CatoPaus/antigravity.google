@@ -71,6 +71,7 @@ All selected Antigravity components are up to date.
 | `--check` | `-c` | | Inspect versions without downloading or modifying files. Exits with code `10` if updates are available, `0` if all are current. |
 | `--verify` | `-V` | `--doctor` | Run comprehensive health and integrity checks on all installed components (binaries, sandbox, symlinks, libraries, permissions). |
 | `--repair` | | `--fix` | Automatically repair corrupted binaries, incorrect sandbox permissions, broken symlinks, missing icons, and permission issues. |
+| `--fix-path` | | | Ensure `~/.local/bin` is in shell profiles (`~/.bashrc`, `~/.zshrc`) and launch a refreshed shell session. |
 | `--force` | `-f` | | Force re-download and reinstall even if already at the latest version (useful for repairing corrupted installations). |
 | `--prune` | `-p` | `--clean` | Delete outdated cached tarballs from `~/Downloads` and remove `/opt/*.bak` folders. |
 | `--no-git` | | `--skip-git` | Bypass automatic Git repository synchronization on startup (or set `ANTIGRAVITY_NO_GIT=1`). |
@@ -89,6 +90,12 @@ update-antigravity --doctor
 
 # Automatically repair detected issues (SUID sandbox, bad symlinks, permissions):
 update-antigravity --repair
+
+# Configure shell profiles to include ~/.local/bin and launch refreshed shell:
+update-antigravity --fix-path
+
+# Instantly load Antigravity PATH in your current terminal session:
+eval "$(update-antigravity env)"
 
 # Check if any updates are available across all components:
 update-antigravity --check

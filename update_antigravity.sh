@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.1"
+SCRIPT_VERSION="2.3.2"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -215,12 +215,32 @@ run_verification() {
     warn "/usr/local/bin is missing from current PATH"
     path_ok=false
   fi
-  if [ -d "$USER_HOME/.local/bin" ] && [[ ":$PATH:" != *":$USER_HOME/.local/bin:"* ]] && [[ ":$PATH:" != *":~/.local/bin:"* ]]; then
-    warn "$USER_HOME/.local/bin exists but is not in current PATH (run: source ~/.bashrc or open a new terminal)"
-    path_ok=false
-  fi
-  if [ "$path_ok" = true ]; then
-    pass "PATH integration: system and user bin directories accessible"
+
+  if [ -d "$USER_HOME/.local/bin" ]; then
+    if [[ ":$PATH:" == *":$USER_HOME/.local/bin:"* ]] || [[ ":$PATH:" == *":~/.local/bin:"* ]]; then
+      pass "PATH integration: system and user bin directories accessible in active shell"
+    else
+      local configured_in_rc=false
+      for rc in "$USER_HOME/.bashrc" "$USER_HOME/.profile" "$USER_HOME/.zshrc"; do
+        if [ -f "$rc" ] && grep -q '\.local/bin' "$rc" 2>/dev/null; then
+          configured_in_rc=true
+          break
+        fi
+      done
+
+      if [ "$configured_in_rc" = true ]; then
+        pass "PATH integration: ~/.local/bin configured in shell config (active on next terminal or: eval \"\$(update-antigravity env)\")"
+      elif [ -x "/usr/local/bin/agy" ]; then
+        pass "PATH integration: ~/.local/bin covered by /usr/local/bin system symlinks"
+      else
+        warn "$USER_HOME/.local/bin exists but is not in current PATH or shell configuration (run: update-antigravity --fix-path)"
+        path_ok=false
+      fi
+    fi
+  else
+    if [ "$path_ok" = true ]; then
+      pass "PATH integration: system bin directory accessible (/usr/local/bin)"
+    fi
   fi
 
   if [ -n "${WAYLAND_DISPLAY:-}" ]; then
@@ -450,7 +470,7 @@ except Exception:
       pass "CLI accessibility: 'agy' command resolves in PATH"
     else
       warn "'agy' is installed at $AGY_BIN but directory is not in your current PATH"
-      echo -e "       ${C_DIM}Run: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc (or run 'update-antigravity --repair')${C_RESET}"
+      echo -e "       ${C_DIM}Run: eval \"\$(update-antigravity env)\" (or: update-antigravity --fix-path)${C_RESET}"
     fi
   else
     warn "Antigravity CLI (agy) not installed (install via: curl -fsSL https://antigravity.google/cli/install.sh | bash)"
@@ -756,6 +776,75 @@ DESKTOP_IDE_EOF
 }
 
 # ============================================================
+# PATH CONFIGURATION SUBSYSTEM (--fix-path)
+# ============================================================
+run_fix_path() {
+  echo "============================================================"
+  echo "          Antigravity User PATH Configuration               "
+  echo "============================================================"
+
+  local target_dir="$USER_HOME/.local/bin"
+  mkdir -p "$target_dir" 2>/dev/null || true
+  if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    chown "$ACTUAL_USER:" "$target_dir" 2>/dev/null || true
+  fi
+
+  # 1. Update shell configuration files
+  local path_line='export PATH="$HOME/.local/bin:$PATH"'
+  for rc in "$USER_HOME/.bashrc" "$USER_HOME/.profile" "$USER_HOME/.zshrc"; do
+    if [ -f "$rc" ]; then
+      if ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+        echo "" >> "$rc"
+        echo '# Antigravity CLI and User Tools PATH' >> "$rc"
+        echo "$path_line" >> "$rc"
+        if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+          chown "$ACTUAL_USER:" "$rc" 2>/dev/null || true
+        fi
+        echo -e "  ${C_GREEN}[✓]${C_RESET} Added ~/.local/bin to $(basename "$rc")"
+      else
+        echo -e "  ${C_GREEN}[✓]${C_RESET} ~/.local/bin is already configured in $(basename "$rc")"
+      fi
+    fi
+  done
+
+  # 2. If agy exists and root is available, ensure /usr/local/bin/agy symlink
+  if [ -x "$USER_HOME/.local/bin/agy" ]; then
+    if [ "$EUID" -eq 0 ]; then
+      rm -f /usr/local/bin/agy
+      ln -sf "$USER_HOME/.local/bin/agy" /usr/local/bin/agy
+      echo -e "  ${C_GREEN}[✓]${C_RESET} Linked /usr/local/bin/agy system launcher"
+    elif [ -w "/usr/local/bin" ]; then
+      rm -f /usr/local/bin/agy
+      ln -sf "$USER_HOME/.local/bin/agy" /usr/local/bin/agy 2>/dev/null || true
+    fi
+  fi
+
+  echo ""
+  echo "============================================================"
+  echo -e "${C_GREEN}${C_BOLD}PATH configuration complete!${C_RESET}"
+  echo ""
+  echo "To apply changes to your current terminal window immediately:"
+  echo -e "  ${C_CYAN}eval \"\$(update-antigravity env)\"${C_RESET}  (or: ${C_CYAN}source ~/.bashrc${C_RESET})"
+  echo "============================================================"
+
+  # If running in an interactive terminal, offer to launch a refreshed shell now
+  if [ -t 0 ] && [ -t 1 ]; then
+    echo ""
+    read -r -p "Would you like to launch a refreshed shell now with the new PATH? [Y/n] " response || response=""
+    case "$response" in
+      [nN][oO]|[nN])
+        echo "Continuing in current shell."
+        ;;
+      *)
+        echo "Launching refreshed shell..."
+        local user_shell="${SHELL:-/bin/bash}"
+        exec "$user_shell"
+        ;;
+    esac
+  fi
+}
+
+# ============================================================
 # GIT REPOSITORY AUTO-SYNC
 # ============================================================
 sync_git_repo() {
@@ -876,6 +965,7 @@ FORCE=false
 PRUNE=false
 VERIFY_ONLY=false
 REPAIR_MODE=false
+FIX_PATH_MODE=false
 NO_GIT=false
 TARGET_HUB=true
 TARGET_IDE=true
@@ -898,6 +988,14 @@ while [ $# -gt 0 ]; do
     --repair|--fix)
       REPAIR_MODE=true
       shift
+      ;;
+    --fix-path)
+      FIX_PATH_MODE=true
+      shift
+      ;;
+    env)
+      echo "export PATH=\"$USER_HOME/.local/bin:/usr/local/bin:\$PATH\""
+      exit 0
       ;;
     -p|--prune|--clean)
       PRUNE=true
@@ -942,6 +1040,7 @@ while [ $# -gt 0 ]; do
       echo "  -f, --force                Reinstall the latest version even if already up to date"
       echo "  -V, --verify, --doctor     Verify health & integrity of current installations"
       echo "      --repair, --fix        Automatically repair permissions, symlinks, and broken files"
+      echo "      --fix-path             Add ~/.local/bin to shell profiles and launch refreshed shell"
       echo "  -p, --prune, --clean       Delete outdated cached tarballs and backup folders"
       echo "      --no-git, --skip-git   Skip automatic Git repository synchronization"
       echo "  -v, --version              Show script version ($SCRIPT_VERSION)"
@@ -949,6 +1048,9 @@ while [ $# -gt 0 ]; do
       echo "      --ide, --only-ide      Only check/update Antigravity IDE"
       echo "      --cli, --only-cli      Only check/update Antigravity CLI"
       echo "  -h, --help                 Show this help message"
+      echo ""
+      echo "Helper Commands:"
+      echo "  eval \"\$(update-antigravity env)\"   Instantly load Antigravity PATH in current terminal"
       exit 0
       ;;
     *)
@@ -961,6 +1063,12 @@ done
 
 # Auto-sync updater script from Git repository before running any actions
 sync_git_repo "${ORIGINAL_ARGS[@]}"
+
+# If fix-path requested, run PATH configuration subsystem
+if [ "$FIX_PATH_MODE" = true ]; then
+  run_fix_path
+  exit 0
+fi
 
 # If verify-only, run verification immediately (read-only, no root required)
 if [ "$VERIFY_ONLY" = true ]; then
