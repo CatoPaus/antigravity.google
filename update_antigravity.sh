@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.3.1"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -450,6 +450,7 @@ except Exception:
       pass "CLI accessibility: 'agy' command resolves in PATH"
     else
       warn "'agy' is installed at $AGY_BIN but directory is not in your current PATH"
+      echo -e "       ${C_DIM}Run: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc (or run 'update-antigravity --repair')${C_RESET}"
     fi
   else
     warn "Antigravity CLI (agy) not installed (install via: curl -fsSL https://antigravity.google/cli/install.sh | bash)"
@@ -616,6 +617,27 @@ LAUNCHER_HUB_EOF
     chown -h "$ACTUAL_USER:" "$USER_HOME/.local/bin/update-antigravity" 2>/dev/null || true
   fi
   echo "    ✓ update-antigravity command links restored"
+
+  # Link agy CLI into /usr/local/bin if installed in user local bin
+  local user_agy="$USER_HOME/.local/bin/agy"
+  if [ -f "$user_agy" ] && [ -x "$user_agy" ]; then
+    rm -f /usr/local/bin/agy
+    ln -sf "$user_agy" /usr/local/bin/agy
+    echo "    ✓ /usr/local/bin/agy launcher restored"
+  fi
+
+  # Ensure ~/.local/bin is in user's shell rc files
+  if [ -n "${USER_HOME:-}" ] && [ "$ACTUAL_USER" != "root" ]; then
+    for rc in "$USER_HOME/.bashrc" "$USER_HOME/.profile" "$USER_HOME/.zshrc"; do
+      if [ -f "$rc" ] && ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+        echo "" >> "$rc"
+        echo '# Antigravity CLI PATH' >> "$rc"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+        chown "$ACTUAL_USER:" "$rc" 2>/dev/null || true
+        echo "    ✓ Added ~/.local/bin to $(basename "$rc")"
+      fi
+    done
+  fi
 
   echo "==> [3/6] Restoring desktop files and icons..."
   if [ -d "$HUB_DIR" ]; then
@@ -1636,7 +1658,7 @@ if [ "$TARGET_CLI" = true ]; then
   fi
 fi
 
-# Ensure update-antigravity command is registered in PATH (system-wide and user-level)
+# Ensure update-antigravity and agy commands are registered in PATH
 if [ "$EUID" -eq 0 ] && [ -f "$SCRIPT_PATH" ]; then
   ln -sf "$SCRIPT_PATH" /usr/local/bin/update-antigravity 2>/dev/null || true
 fi
@@ -1645,6 +1667,22 @@ if [ -n "${USER_HOME:-}" ] && [ -d "$USER_HOME/.local/bin" ] && [ -f "$SCRIPT_PA
   if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
     chown -h "$ACTUAL_USER:" "$USER_HOME/.local/bin/update-antigravity" 2>/dev/null || true
   fi
+fi
+
+if [ "$EUID" -eq 0 ] && [ -x "$USER_HOME/.local/bin/agy" ]; then
+  ln -sf "$USER_HOME/.local/bin/agy" /usr/local/bin/agy 2>/dev/null || true
+fi
+
+# Ensure ~/.local/bin is in shell rc files if missing from PATH
+if [ -n "${USER_HOME:-}" ] && [ "$ACTUAL_USER" != "root" ] && [ -d "$USER_HOME/.local/bin" ]; then
+  for rc in "$USER_HOME/.bashrc" "$USER_HOME/.profile" "$USER_HOME/.zshrc"; do
+    if [ -f "$rc" ] && ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+      echo "" >> "$rc"
+      echo '# Antigravity CLI PATH' >> "$rc"
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+      chown "$ACTUAL_USER:" "$rc" 2>/dev/null || true
+    fi
+  done
 fi
 
 # Check and warn if apps are actively running
