@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -88,7 +88,7 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
   else
     echo "==> Root privileges required to install dependencies: ${MISSING_TOOLS[*]}"
     echo "    Elevating with sudo..."
-    exec sudo bash "$SCRIPT_PATH" "$@"
+    exec sudo bash "$SCRIPT_PATH" --no-git "$@"
   fi
 fi
 
@@ -489,6 +489,39 @@ except Exception:
     fail "Found broken symlink(s): ${broken_links[*]}"
   fi
 
+  # 6. Updater Script & Git Synchronization
+  echo ""
+  echo -e "${C_BOLD}--> Updater Script & Git Synchronization:${C_RESET}"
+  if [ -x "$SCRIPT_PATH" ]; then
+    pass "Updater script: executable at $SCRIPT_PATH (v$SCRIPT_VERSION)"
+  else
+    fail "Updater script: not executable ($SCRIPT_PATH)"
+  fi
+
+  local repo_dir
+  repo_dir="$(dirname "$SCRIPT_PATH")"
+  if command -v git >/dev/null 2>&1 && git -c safe.directory="*" -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local branch git_hash remote_url
+    branch=$(git -c safe.directory="*" -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    git_hash=$(git -c safe.directory="*" -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    remote_url=$(git -c safe.directory="*" -C "$repo_dir" remote get-url origin 2>/dev/null || echo "none")
+
+    pass "Git repository: managed at $repo_dir (branch: $branch, commit: $git_hash)"
+    if [ "$remote_url" != "none" ]; then
+      pass "Git remote: configured ($remote_url)"
+    else
+      warn "Git remote: no 'origin' remote configured"
+    fi
+
+    if git -c safe.directory="*" -C "$repo_dir" diff --quiet 2>/dev/null && git -c safe.directory="*" -C "$repo_dir" diff --cached --quiet 2>/dev/null; then
+      pass "Git working tree: clean (no uncommitted modifications)"
+    else
+      warn "Git working tree: contains local uncommitted modifications"
+    fi
+  else
+    pass "Updater script: running in standalone mode (no Git repository)"
+  fi
+
   # Final Result Summary
   echo ""
   echo "============================================================"
@@ -526,7 +559,7 @@ run_repair() {
     echo ""
     echo "==> Root privileges required to repair system files and permissions."
     echo "    Prompting for sudo..."
-    exec sudo bash "$SCRIPT_PATH" --repair "$@"
+    exec sudo bash "$SCRIPT_PATH" --no-git --repair "$@"
   fi
 
   echo "==> [1/6] Fixing chrome-sandbox SUID permissions (mode 4755 root:root)..."
@@ -700,12 +733,128 @@ DESKTOP_IDE_EOF
   fi
 }
 
+# ============================================================
+# GIT REPOSITORY AUTO-SYNC
+# ============================================================
+sync_git_repo() {
+  # 1. Skip if git sync is disabled by flag, environment variable, or already completed in parent process
+  if [ "${NO_GIT:-false}" = true ] || [ "${ANTIGRAVITY_NO_GIT:-0}" = "1" ] || [ "${_ANTIGRAVITY_GIT_SYNCED:-0}" = "1" ]; then
+    return 0
+  fi
+
+  # 2. Check if git is available
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 3. Resolve directory containing the canonical script
+  local repo_dir
+  repo_dir="$(dirname "$SCRIPT_PATH")"
+
+  # 4. Check if directory is inside a Git working tree
+  if ! git -c safe.directory="*" -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 5. Check if an origin remote exists
+  if ! git -c safe.directory="*" -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 6. Check for uncommitted local changes
+  if ! git -c safe.directory="*" -C "$repo_dir" diff --quiet 2>/dev/null || ! git -c safe.directory="*" -C "$repo_dir" diff --cached --quiet 2>/dev/null; then
+    echo -e "${C_DIM}==> Git: Uncommitted local modifications detected; skipping auto-update.${C_RESET}"
+    return 0
+  fi
+
+  # 7. Identify tracking upstream branch
+  local upstream
+  upstream=$(git -c safe.directory="*" -C "$repo_dir" rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null || true)
+  if [ -z "$upstream" ]; then
+    if git -c safe.directory="*" -C "$repo_dir" rev-parse --verify origin/main >/dev/null 2>&1; then
+      upstream="origin/main"
+    elif git -c safe.directory="*" -C "$repo_dir" rev-parse --verify origin/master >/dev/null 2>&1; then
+      upstream="origin/master"
+    else
+      return 0
+    fi
+  fi
+
+  echo "==> Checking for latest updater script from Git repository..."
+
+  # 8. Fetch from origin with 5-second timeout and batch mode to prevent blocking
+  local fetch_ok=false
+  if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    if sudo -u "$ACTUAL_USER" GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o ConnectTimeout=5 -o BatchMode=yes" git -c safe.directory="*" -C "$repo_dir" fetch --quiet origin 2>/dev/null; then
+      fetch_ok=true
+    fi
+  else
+    if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o ConnectTimeout=5 -o BatchMode=yes" git -c safe.directory="*" -C "$repo_dir" fetch --quiet origin 2>/dev/null; then
+      fetch_ok=true
+    fi
+  fi
+
+  if [ "$fetch_ok" != true ]; then
+    echo -e "${C_DIM}    Notice: Git remote unreachable (offline or SSH unavailable); continuing with local version.${C_RESET}"
+    return 0
+  fi
+
+  # 9. Compare local HEAD with upstream
+  local local_hash upstream_hash base_hash
+  local_hash=$(git -c safe.directory="*" -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)
+  upstream_hash=$(git -c safe.directory="*" -C "$repo_dir" rev-parse "$upstream" 2>/dev/null || true)
+
+  if [ -z "$local_hash" ] || [ -z "$upstream_hash" ]; then
+    return 0
+  fi
+
+  if [ "$local_hash" = "$upstream_hash" ]; then
+    echo -e "    ${C_GREEN}✓ Updater script is up to date with Git (${local_hash:0:7}).${C_RESET}"
+    return 0
+  fi
+
+  base_hash=$(git -c safe.directory="*" -C "$repo_dir" merge-base HEAD "$upstream" 2>/dev/null || true)
+
+  if [ "$local_hash" = "$base_hash" ]; then
+    # Upstream is ahead: fast-forward merge
+    echo -e "==> ${C_CYAN}New version of updater script detected in Git! Pulling updates...${C_RESET}"
+    local merge_ok=false
+    if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      if sudo -u "$ACTUAL_USER" git -c safe.directory="*" -C "$repo_dir" merge --ff-only "$upstream" >/dev/null 2>&1; then
+        merge_ok=true
+      fi
+    else
+      if git -c safe.directory="*" -C "$repo_dir" merge --ff-only "$upstream" >/dev/null 2>&1; then
+        merge_ok=true
+      fi
+    fi
+
+    if [ "$merge_ok" = true ]; then
+      local new_hash
+      new_hash=$(git -c safe.directory="*" -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "latest")
+      echo -e "${C_GREEN}✓ Successfully updated updater script to Git commit $new_hash.${C_RESET}"
+      echo "==> Re-executing with latest updater script..."
+      echo ""
+      export _ANTIGRAVITY_GIT_SYNCED=1
+      exec bash "$SCRIPT_PATH" "$@"
+    else
+      echo -e "${C_YELLOW}    Warning: Fast-forward merge failed. Continuing with local version.${C_RESET}"
+    fi
+  elif [ "$upstream_hash" = "$base_hash" ]; then
+    echo -e "${C_DIM}    Notice: Local repository is ahead of Git remote. Continuing.${C_RESET}"
+  else
+    echo -e "${C_DIM}    Notice: Local repository and Git remote have diverged. Continuing.${C_RESET}"
+  fi
+}
+
 # 5. Parse Arguments
+ORIGINAL_ARGS=("$@")
 CHECK_ONLY=false
 FORCE=false
 PRUNE=false
 VERIFY_ONLY=false
 REPAIR_MODE=false
+NO_GIT=false
 TARGET_HUB=true
 TARGET_IDE=true
 TARGET_CLI=true
@@ -730,6 +879,10 @@ while [ $# -gt 0 ]; do
       ;;
     -p|--prune|--clean)
       PRUNE=true
+      shift
+      ;;
+    --no-git|--skip-git)
+      NO_GIT=true
       shift
       ;;
     -v|--version)
@@ -768,6 +921,7 @@ while [ $# -gt 0 ]; do
       echo "  -V, --verify, --doctor     Verify health & integrity of current installations"
       echo "      --repair, --fix        Automatically repair permissions, symlinks, and broken files"
       echo "  -p, --prune, --clean       Delete outdated cached tarballs and backup folders"
+      echo "      --no-git, --skip-git   Skip automatic Git repository synchronization"
       echo "  -v, --version              Show script version ($SCRIPT_VERSION)"
       echo "      --hub, --only-hub      Only check/update Antigravity 2.0"
       echo "      --ide, --only-ide      Only check/update Antigravity IDE"
@@ -782,6 +936,9 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# Auto-sync updater script from Git repository before running any actions
+sync_git_repo "${ORIGINAL_ARGS[@]}"
 
 # If verify-only, run verification immediately (read-only, no root required)
 if [ "$VERIFY_ONLY" = true ]; then
@@ -1172,7 +1329,7 @@ if [ "$EUID" -ne 0 ]; then
   echo ""
   echo "==> Root privileges required to install updates to /opt."
   echo "    Prompting for sudo..."
-  exec sudo bash "$SCRIPT_PATH" "$@"
+  exec sudo bash "$SCRIPT_PATH" --no-git "$@"
 fi
 
 # Check available disk space (at least 1GB in /opt and download dir)

@@ -73,6 +73,7 @@ All selected Antigravity components are up to date.
 | `--repair` | | `--fix` | Automatically repair corrupted binaries, incorrect sandbox permissions, broken symlinks, missing icons, and permission issues. |
 | `--force` | `-f` | | Force re-download and reinstall even if already at the latest version (useful for repairing corrupted installations). |
 | `--prune` | `-p` | `--clean` | Delete outdated cached tarballs from `~/Downloads` and remove `/opt/*.bak` folders. |
+| `--no-git` | | `--skip-git` | Bypass automatic Git repository synchronization on startup (or set `ANTIGRAVITY_NO_GIT=1`). |
 | `--version` | `-v` | | Display script version. |
 | `--hub` | | `--only-hub` | Target only **Antigravity 2.0 (Hub)** desktop application. |
 | `--ide` | | `--only-ide` | Target only **Antigravity IDE** code editor. |
@@ -158,50 +159,46 @@ update-antigravity --force
    * CLI updates (`agy update`) and user desktop shortcuts are created with the appropriate non-root ownership, preventing root-owned files in user home directories.
    * Root elevation is deferred: checking versions (`--check`) requires zero elevated permissions.
 
----
-
-## Deploying on Another Machine (Clean-Slate Ubuntu)
-
-### What Files to Copy?
-You only need to copy **one script**:
-* `update_antigravity.sh` *(and optionally `README.md` for reference)*
-
-> [!NOTE]
-> You do **not** need to manually copy the installed application directories (`/opt/Antigravity`), desktop files, or icons. The script is completely self-sufficient: it auto-installs prerequisites, downloads matching architecture packages, extracts high-res icons, and registers desktop entries.
-
-#### Optional: Pre-caching Archives for Offline / Low-Bandwidth Setup
-If the target machine has slow, metered, or restricted internet, you can pre-copy downloaded tarballs into the user's `~/Downloads/` directory:
-* `~/Downloads/Antigravity-<version>.tar.gz`
-* `~/Downloads/Antigravity-IDE-<version>.tar.gz`
-
-The script will automatically detect and verify these cached archives and skip downloading.
+9. **Automatic Git Synchronization (Multi-Machine Sync):**
+   * If running inside a Git repository (e.g. `~/.local/share/antigravity-updater`), the script automatically fetches upstream commits from `origin` before running any checks or installations.
+   * If an update is detected, it performs a clean fast-forward merge and restarts itself (`exec bash`) seamlessly with the latest code.
+   * Offline-friendly with a 5-second connection timeout, non-interactive SSH batch mode, local uncommitted modification protection, and a `--no-git` bypass switch.
 
 ---
 
-### Step-by-Step Setup on a New Machine
+## Deploying on Multiple Machines (Fleet Setup)
 
-1. **Copy the script to the target machine:**
-   ```bash
-   scp ~/Downloads/update_antigravity.sh user@target-machine:~/
-   ```
+### Recommended: Git Clone (Auto-Updating)
+Cloning the Git repository directly ensures the updater always stays up to date with new features, bug fixes, and Google release changes across all your machines:
 
-2. **Make it executable:**
-   ```bash
-   chmod +x ~/update_antigravity.sh
-   ```
+```bash
+# 1. Clone repository into local user storage
+git clone git@github.com:CatoPaus/antigravity.google.git ~/.local/share/antigravity-updater
 
-3. **Install Antigravity Suite:**
-   ```bash
-   ~/update_antigravity.sh
-   ```
-   *(The script will prompt for `sudo` when needed for installing to `/opt` and `/usr/share`.)*
+# 2. Link command into user PATH
+mkdir -p ~/.local/bin
+ln -sf ~/.local/share/antigravity-updater/update_antigravity.sh ~/.local/bin/update-antigravity
 
-4. **(Recommended) Add `update-antigravity` command to PATH:**
-   ```bash
-   mkdir -p ~/.local/bin
-   ln -sf ~/Downloads/update_antigravity.sh ~/.local/bin/update-antigravity
-   ```
-   Ensure `~/.local/bin` is in your `$PATH` (standard on Ubuntu). You can now run `update-antigravity` from any directory.
+# 3. Run initial check, verification, or installation
+update-antigravity --verify
+update-antigravity
+```
+
+*(Every subsequent run will automatically pull any new improvements made to the GitHub repository!)*
+
+### Alternative: Standalone Script Copy (SCP)
+If Git or SSH keys are not set up on the target machine, you can copy just the standalone script:
+
+```bash
+# On your development machine:
+scp ~/.local/share/antigravity-updater/update_antigravity.sh user@target-machine:~/.local/share/antigravity-updater/update_antigravity.sh
+
+# On the target machine:
+chmod +x ~/.local/share/antigravity-updater/update_antigravity.sh
+mkdir -p ~/.local/bin
+ln -sf ~/.local/share/antigravity-updater/update_antigravity.sh ~/.local/bin/update-antigravity
+update-antigravity
+```
 
 ---
 
@@ -209,8 +206,10 @@ The script will automatically detect and verify these cached archives and skip d
 
 | Resource | Path |
 | :--- | :--- |
-| **Updater Script** | `~/Downloads/update_antigravity.sh` |
-| **Updater Command Symlink** | `~/.local/bin/update-antigravity` |
+| **Updater Git Repo** | `~/.local/share/antigravity-updater/` |
+| **Updater Script** | `~/.local/share/antigravity-updater/update_antigravity.sh` |
+| **User Command Symlink** | `~/.local/bin/update-antigravity` |
+| **System Command Symlink** | `/usr/local/bin/update-antigravity` |
 | **Antigravity 2.0 (Hub) Dir** | `/opt/Antigravity` |
 | **Antigravity IDE Dir** | `/opt/Antigravity-IDE` |
 | **System Binaries** | `/usr/local/bin/antigravity`, `/usr/local/bin/antigravity-ide` |
