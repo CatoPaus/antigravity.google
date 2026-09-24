@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.2"
+SCRIPT_VERSION="2.3.3"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -1130,14 +1130,21 @@ check_disk_space() {
   fi
 }
 
-# Helper: Warn if application is actively running in memory
-warn_if_running() {
-  local process_pattern="$1"
-  local app_name="$2"
-  if pgrep -f "$process_pattern" >/dev/null 2>&1; then
+# Helper: Warn if applications are actively running in memory
+check_running_processes() {
+  local warned=false
+  if pgrep -x "antigravity" >/dev/null 2>&1 || pgrep -f "^/opt/Antigravity/antigravity" >/dev/null 2>&1; then
     echo ""
-    echo -e "${C_YELLOW}⚠️  Notice: $app_name is currently running.${C_RESET}"
-    echo "    Please restart $app_name after this update to load the new version."
+    echo -e "${C_YELLOW}⚠️  Notice: Antigravity 2.0 is currently running.${C_RESET}"
+    echo "    Please restart Antigravity 2.0 to load the newly updated version."
+    warned=true
+  fi
+
+  if pgrep -x "antigravity-ide" >/dev/null 2>&1 || pgrep -f "^/opt/Antigravity-IDE/antigravity-ide" >/dev/null 2>&1; then
+    echo ""
+    echo -e "${C_YELLOW}⚠️  Notice: Antigravity IDE is currently running.${C_RESET}"
+    echo "    Please restart Antigravity IDE to load the newly updated version."
+    warned=true
   fi
 }
 
