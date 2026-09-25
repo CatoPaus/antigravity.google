@@ -132,7 +132,7 @@ update-antigravity --force
 1. **Smart Version Resolution & Binary Inspection:**
    * **Antigravity 2.0:** Parses the Electron `resources/app.asar` archive directly using binary header unpacking to read the true installed `package.json` version. Resolves upstream versions against the official Google Cloud storage release manifest.
    * **Antigravity IDE:** Reads `resources/app/product.json` to obtain `ideVersion`. Queries the official auto-updater API with proper URL-encoding and SHA256 metadata verification.
-   * **Antigravity CLI:** Dynamically queries `agy --version`, checks against Google's official release manifests (`linux_amd64` / `linux_arm64`), and runs non-root self-updates via `agy update`.
+   * **Antigravity CLI:** Dynamically queries `agy --version`, checks against Google's official release manifests (`linux_amd64` / `linux_arm64`), and runs non-root self-updates via `agy update`. Automatically cleans deprecated legacy permission rules (`unsandboxed(...)`) from `~/.gemini/config/config.json`.
 
 2. **Self-Healing Dependencies:**
    * Automatically detects and installs base utility tools (`curl`, `python3`, `tar`, `ca-certificates`) via `apt-get` if missing on minimal Ubuntu systems.

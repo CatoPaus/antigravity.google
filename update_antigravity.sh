@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.3"
+SCRIPT_VERSION="2.3.4"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -472,6 +472,18 @@ except Exception:
       warn "'agy' is installed at $AGY_BIN but directory is not in your current PATH"
       echo -e "       ${C_DIM}Run: eval \"\$(update-antigravity env)\" (or: update-antigravity --fix-path)${C_RESET}"
     fi
+
+    local cli_cfg="$USER_HOME/.gemini/config/config.json"
+    if [ -f "$cli_cfg" ]; then
+      local unsandboxed_count=0
+      unsandboxed_count=$(grep -c 'unsandboxed(' "$cli_cfg" 2>/dev/null || true)
+      unsandboxed_count="${unsandboxed_count:-0}"
+      if [ "$unsandboxed_count" -eq 0 ]; then
+        pass "CLI configuration: clean (no deprecated permission rules in config.json)"
+      else
+        warn "CLI configuration: found $unsandboxed_count deprecated 'unsandboxed' rule(s) in config.json (run: update-antigravity --repair)"
+      fi
+    fi
   else
     warn "Antigravity CLI (agy) not installed (install via: curl -fsSL https://antigravity.google/cli/install.sh | bash)"
   fi
@@ -744,12 +756,13 @@ DESKTOP_IDE_EOF
   fi
   echo "    ✓ Desktop and icon caches refreshed"
 
-  echo "==> [5/6] Restoring user directory ownership..."
+  echo "==> [5/6] Restoring user directory ownership and cleaning configuration..."
   if [ -n "${USER_HOME:-}" ] && [ "$ACTUAL_USER" != "root" ]; then
     chown -R "$ACTUAL_USER:" "$USER_HOME/.local/share/icons" "$USER_HOME/.local/share/applications" 2>/dev/null || true
     [ -d "$USER_HOME/.local/bin" ] && chown "$ACTUAL_USER:" "$USER_HOME/.local/bin"/antigravity* 2>/dev/null || true
     echo "    ✓ User directory permissions normalized to $ACTUAL_USER"
   fi
+  clean_legacy_permissions
 
   # Check if binaries are corrupted, and trigger reinstall if so
   echo "==> [6/6] Checking for corrupted binaries requiring full reinstall..."
@@ -841,6 +854,45 @@ run_fix_path() {
         exec "$user_shell"
         ;;
     esac
+  fi
+}
+
+# ============================================================
+# CLI PERMISSION SANITIZATION
+# ============================================================
+clean_legacy_permissions() {
+  local cli_cfg="$USER_HOME/.gemini/config/config.json"
+  if [ -f "$cli_cfg" ] && grep -q 'unsandboxed(' "$cli_cfg" 2>/dev/null; then
+    local res
+    res=$(python3 -c "
+import json, shutil, os, sys
+cfg_path = '$cli_cfg'
+try:
+    if os.path.exists(cfg_path):
+        shutil.copyfile(cfg_path, cfg_path + '.bak')
+        with open(cfg_path, 'r') as f:
+            cfg = json.load(f)
+        grants = cfg.get('userSettings', {}).get('globalPermissionGrants', {}).get('allow', [])
+        cleaned = [g for g in grants if not g.startswith('unsandboxed(')]
+        removed = len(grants) - len(cleaned)
+        if removed > 0:
+            cfg['userSettings']['globalPermissionGrants']['allow'] = cleaned
+            with open(cfg_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            print(f'{removed}')
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" 2>/dev/null || echo "")
+
+    if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      chown "$ACTUAL_USER:" "$cli_cfg" "$cli_cfg.bak" 2>/dev/null || true
+    fi
+
+    if [ -n "$res" ] && [ "$res" -gt 0 ] 2>/dev/null; then
+      echo "    ✓ Cleaned $res deprecated 'unsandboxed' rule(s) from ~/.gemini/config/config.json"
+    fi
   fi
 }
 
@@ -1799,6 +1851,9 @@ if [ -n "${USER_HOME:-}" ] && [ "$ACTUAL_USER" != "root" ] && [ -d "$USER_HOME/.
     fi
   done
 fi
+
+# Clean deprecated permission rules in CLI configuration if present
+clean_legacy_permissions
 
 # Check and warn if apps are actively running
 check_running_processes
