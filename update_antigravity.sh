@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.4"
+SCRIPT_VERSION="2.3.5"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -758,8 +758,7 @@ DESKTOP_IDE_EOF
 
   echo "==> [5/6] Restoring user directory ownership and cleaning configuration..."
   if [ -n "${USER_HOME:-}" ] && [ "$ACTUAL_USER" != "root" ]; then
-    chown -R "$ACTUAL_USER:" "$USER_HOME/.local/share/icons" "$USER_HOME/.local/share/applications" 2>/dev/null || true
-    [ -d "$USER_HOME/.local/bin" ] && chown "$ACTUAL_USER:" "$USER_HOME/.local/bin"/antigravity* 2>/dev/null || true
+    chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
     echo "    ✓ User directory permissions normalized to $ACTUAL_USER"
   fi
   clean_legacy_permissions
@@ -1661,8 +1660,7 @@ DESKTOP_HUB_EOF
     rm -f "$USER_HOME/.local/bin/antigravity"
     cp -f /usr/local/bin/antigravity "$USER_HOME/.local/bin/antigravity"
     cp -f /usr/share/applications/antigravity.desktop "$USER_HOME/.local/share/applications/antigravity.desktop"
-    chown "$ACTUAL_USER:" "$USER_HOME/.local/bin/antigravity" 2>/dev/null || true
-    chown "$ACTUAL_USER:" "$USER_HOME/.local/share/applications/antigravity.desktop" 2>/dev/null || true
+    chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
   fi
 
   # Reclaim disk space: prune older Antigravity Hub archives
@@ -1751,7 +1749,7 @@ if [ "$NEEDS_UPDATE_IDE" = true ]; then
     mkdir -p "$USER_HOME/.local/bin"
     rm -f "$USER_HOME/.local/bin/antigravity-ide"
     ln -sf "$IDE_DIR/antigravity-ide" "$USER_HOME/.local/bin/antigravity-ide"
-    chown -h "$ACTUAL_USER:" "$USER_HOME/.local/bin/antigravity-ide" 2>/dev/null || true
+    chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
   fi
   
   # Desktop Entry
@@ -1772,7 +1770,7 @@ DESKTOP_IDE_EOF
   if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
     mkdir -p "$USER_HOME/.local/share/applications"
     cp -f /usr/share/applications/antigravity-ide.desktop "$USER_HOME/.local/share/applications/antigravity-ide.desktop"
-    chown "$ACTUAL_USER:" "$USER_HOME/.local/share/applications/antigravity-ide.desktop" 2>/dev/null || true
+    chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
   fi
 
   # Reclaim disk space: prune older Antigravity IDE archives
@@ -1797,7 +1795,7 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-  chown -R "$ACTUAL_USER:" "$USER_HOME/.local/share/icons" "$USER_HOME/.local/share/applications" 2>/dev/null || true
+  chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
 fi
 
 # ------------------------------------------------------------
@@ -1820,8 +1818,18 @@ if [ "$TARGET_CLI" = true ]; then
       echo -e "${C_GREEN}✓ CLI (agy) is already up to date ($CLI_INSTALLED).${C_RESET}"
     fi
   else
-    echo "Antigravity CLI (agy) is not installed."
-    echo "To install the CLI, run: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    echo -e "${C_BOLD}==> Installing Antigravity CLI (agy)...${C_RESET}"
+    if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
+      sudo -u "$ACTUAL_USER" bash -c "curl -fsSL https://antigravity.google/cli/install.sh | bash" || \
+      su - "$ACTUAL_USER" -s /bin/bash -c "curl -fsSL https://antigravity.google/cli/install.sh | bash" || true
+    else
+      curl -fsSL https://antigravity.google/cli/install.sh | bash || true
+    fi
+    AGY_BIN="$(find_agy)"
+    if [ -n "$AGY_BIN" ]; then
+      echo -e "${C_GREEN}✓ Antigravity CLI (agy) installed successfully ($AGY_BIN).${C_RESET}"
+    fi
   fi
 fi
 
