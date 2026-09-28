@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.5"
+SCRIPT_VERSION="2.3.6"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -1458,8 +1458,8 @@ sys.exit(1)
   echo "    Latest:    $CLI_LATEST"
 
   if [ "$CLI_INSTALLED" = "none" ]; then
+    NEEDS_UPDATE_CLI=true
     echo -e "    Status:    ${C_CYAN}Not installed (Available: $CLI_LATEST)${C_RESET}"
-    echo "               Install via: curl -fsSL https://antigravity.google/cli/install.sh | bash"
   elif [ "$CLI_INSTALLED" = "unknown" ]; then
     NEEDS_UPDATE_CLI=true
     echo -e "    Status:    ${C_YELLOW}Unknown version installed (Update available: $CLI_LATEST)${C_RESET}"
@@ -1498,14 +1498,32 @@ fi
 # Check if any desktop updates needed
 if [ "$NEEDS_UPDATE_HUB" = false ] && [ "$NEEDS_UPDATE_IDE" = false ]; then
   echo -e "${C_GREEN}✓ All Antigravity desktop components are up to date.${C_RESET}"
-  if [ "$TARGET_CLI" = true ] && [ -n "$AGY_BIN" ]; then
-    if [ "$NEEDS_UPDATE_CLI" = true ] || [ "$FORCE" = true ]; then
+  if [ "$TARGET_CLI" = true ]; then
+    if [ -n "$AGY_BIN" ]; then
+      if [ "$NEEDS_UPDATE_CLI" = true ] || [ "$FORCE" = true ]; then
+        echo ""
+        echo -e "${C_BOLD}==> Updating CLI (agy)...${C_RESET}"
+        if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+          sudo -u "$ACTUAL_USER" "$AGY_BIN" update 2>/dev/null || su - "$ACTUAL_USER" -s /bin/bash -c ""$AGY_BIN" update" || true
+        else
+          "$AGY_BIN" update || true
+        fi
+      fi
+    else
       echo ""
-      echo -e "${C_BOLD}==> Updating CLI (agy)...${C_RESET}"
+      echo -e "${C_BOLD}==> Installing Antigravity CLI (agy)...${C_RESET}"
       if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        sudo -u "$ACTUAL_USER" "$AGY_BIN" update 2>/dev/null || su - "$ACTUAL_USER" -s /bin/bash -c "\"$AGY_BIN\" update" || true
+        chown -R "$ACTUAL_USER:" "$USER_HOME/.local" 2>/dev/null || true
+        sudo -u "$ACTUAL_USER" bash -c "curl -fsSL https://antigravity.google/cli/install.sh | bash" ||         su - "$ACTUAL_USER" -s /bin/bash -c "curl -fsSL https://antigravity.google/cli/install.sh | bash" || true
       else
-        "$AGY_BIN" update || true
+        curl -fsSL https://antigravity.google/cli/install.sh | bash || true
+      fi
+      AGY_BIN="$(find_agy)"
+      if [ -n "$AGY_BIN" ]; then
+        echo -e "${C_GREEN}✓ Antigravity CLI (agy) installed successfully ($AGY_BIN).${C_RESET}"
+        if [ "$EUID" -eq 0 ] && [ -x "$USER_HOME/.local/bin/agy" ]; then
+          ln -sf "$USER_HOME/.local/bin/agy" /usr/local/bin/agy 2>/dev/null || true
+        fi
       fi
     fi
   fi
