@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.8"
+SCRIPT_VERSION="2.3.9"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -63,11 +63,65 @@ HUB_DIR="/opt/Antigravity"
 HUB_BACKUP_DIR="/opt/Antigravity.bak"
 IDE_DIR="/opt/Antigravity-IDE"
 IDE_BACKUP_DIR="/opt/Antigravity-IDE.bak"
-# Display flags: Disable GPU hardware acceleration on both X11 and Wayland to prevent
-# AMD GPU clock locks and continuous fan noise on Linux, and enable native Wayland when available.
-HUB_BASE_FLAGS="--disable-gpu"
+# Display & GPU configuration:
+# GPU hardware acceleration is enabled by default so new releases are tested normally.
+# If an update triggers high GPU usage / loud fans, toggle with: update-antigravity --gpu off|on|status
 HUB_WAYLAND_FLAGS="--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"
-HUB_DISPLAY_FLAGS="$HUB_BASE_FLAGS $HUB_WAYLAND_FLAGS"
+GPU_CONFIG_DIR="$USER_HOME/.config/antigravity-updater"
+GPU_MODE_FILE="$GPU_CONFIG_DIR/gpu-mode"
+
+get_gpu_mode() {
+  if [ -f "$GPU_MODE_FILE" ] && [ "$(tr -d '[:space:]' < "$GPU_MODE_FILE" 2>/dev/null)" = "off" ]; then
+    echo "off"
+  else
+    echo "on"
+  fi
+}
+
+write_hub_launcher_wrapper() {
+  # Explicitly remove pre-existing file or symlink to prevent writing through a symlink into $HUB_DIR/antigravity
+  rm -f /usr/local/bin/antigravity
+  cat << LAUNCHER_HUB_EOF > /usr/local/bin/antigravity
+#!/usr/bin/env bash
+# Antigravity Launcher Wrapper
+# Dynamically resolves Wayland/X11 environment and GPU preference (~/.config/antigravity-updater/gpu-mode)
+EXTRA_FLAGS=()
+GPU_MODE_FILE="\$HOME/.config/antigravity-updater/gpu-mode"
+DISABLE_GPU=0
+if [ -f "\$GPU_MODE_FILE" ] && [ "\$(tr -d '[:space:]' < "\$GPU_MODE_FILE" 2>/dev/null)" = "off" ]; then
+  DISABLE_GPU=1
+fi
+if [ "\${ANTIGRAVITY_DISABLE_GPU:-}" = "1" ]; then
+  DISABLE_GPU=1
+elif [ "\${ANTIGRAVITY_DISABLE_GPU:-}" = "0" ]; then
+  DISABLE_GPU=0
+fi
+if [ "\$DISABLE_GPU" -eq 1 ]; then
+  EXTRA_FLAGS+=(--disable-gpu)
+fi
+if [ -n "\${WAYLAND_DISPLAY:-}" ] || [ "\${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+  EXTRA_FLAGS+=($HUB_WAYLAND_FLAGS)
+fi
+exec "$HUB_DIR/antigravity" "\${EXTRA_FLAGS[@]}" "\$@"
+LAUNCHER_HUB_EOF
+  chmod 755 /usr/local/bin/antigravity
+}
+
+write_hub_desktop_entry() {
+  cat << DESKTOP_HUB_EOF > /usr/share/applications/antigravity.desktop
+[Desktop Entry]
+Name=Antigravity
+Comment=Antigravity - Agentic Desktop Application
+Exec=/usr/local/bin/antigravity %U
+Icon=antigravity
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=Antigravity
+MimeType=x-scheme-handler/antigravity;
+Keywords=antigravity;ai;agent;gemini;code;ide;
+DESKTOP_HUB_EOF
+}
 
 # 3. Check and Auto-Install Script Dependencies (curl, python3, tar, ca-certificates)
 MISSING_TOOLS=()
@@ -382,6 +436,22 @@ except Exception:
     else
       fail "Desktop icon missing in /usr/share/pixmaps/antigravity.png"
     fi
+
+    local gpu_mode
+    gpu_mode="$(get_gpu_mode)"
+    if [ "$gpu_mode" = "off" ]; then
+      pass "GPU acceleration: disabled via --disable-gpu (run 'update-antigravity --gpu on' to re-enable)"
+    else
+      pass "GPU acceleration: enabled (default; run 'update-antigravity --gpu off' if GPU/fans spike)"
+    fi
+
+    if [ -f "/usr/local/bin/antigravity" ] && [ -f "/usr/share/applications/antigravity.desktop" ]; then
+      if grep -q 'gpu-mode' /usr/local/bin/antigravity 2>/dev/null && grep -q '^Exec=/usr/local/bin/antigravity' /usr/share/applications/antigravity.desktop 2>/dev/null; then
+        pass "GPU toggle integration: dynamic launcher & desktop entry active"
+      else
+        warn "GPU toggle integration: launcher/desktop entry predates dynamic --gpu toggle (run: update-antigravity --repair)"
+      fi
+    fi
   fi
 
   # 3. Antigravity IDE
@@ -634,18 +704,7 @@ run_repair() {
 
   echo "==> [2/6] Repairing launcher scripts and resolving bad symlinks..."
   # Recreate Hub wrapper safely
-  rm -f /usr/local/bin/antigravity
-  cat << LAUNCHER_HUB_EOF > /usr/local/bin/antigravity
-#!/usr/bin/env bash
-# Antigravity Launcher Wrapper
-# Always disables GPU hardware acceleration and dynamically enables native Wayland flags
-EXTRA_FLAGS=($HUB_BASE_FLAGS)
-if [ -n "\${WAYLAND_DISPLAY:-}" ] || [ "\${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  EXTRA_FLAGS+=($HUB_WAYLAND_FLAGS)
-fi
-exec "$HUB_DIR/antigravity" "\${EXTRA_FLAGS[@]}" "\$@"
-LAUNCHER_HUB_EOF
-  chmod 755 /usr/local/bin/antigravity
+  write_hub_launcher_wrapper
   echo "    ✓ /usr/local/bin/antigravity wrapper restored"
 
   if [ -n "${USER_HOME:-}" ] && [ -d "$USER_HOME/.local/bin" ]; then
@@ -698,19 +757,7 @@ LAUNCHER_HUB_EOF
 
   echo "==> [3/6] Restoring desktop files and icons..."
   if [ -d "$HUB_DIR" ]; then
-    cat << DESKTOP_HUB_EOF > /usr/share/applications/antigravity.desktop
-[Desktop Entry]
-Name=Antigravity
-Comment=Antigravity - Agentic Desktop Application
-Exec=$HUB_DIR/antigravity $HUB_DISPLAY_FLAGS %U
-Icon=antigravity
-Terminal=false
-Type=Application
-Categories=Development;IDE;
-StartupWMClass=Antigravity
-MimeType=x-scheme-handler/antigravity;
-Keywords=antigravity;ai;agent;gemini;code;ide;
-DESKTOP_HUB_EOF
+    write_hub_desktop_entry
     if [ -n "${USER_HOME:-}" ] && [ -d "$USER_HOME/.local/share/applications" ]; then
       cp -f /usr/share/applications/antigravity.desktop "$USER_HOME/.local/share/applications/antigravity.desktop"
       chown "$ACTUAL_USER:" "$USER_HOME/.local/share/applications/antigravity.desktop" 2>/dev/null || true
@@ -882,6 +929,88 @@ run_fix_path() {
 }
 
 # ============================================================
+# GPU ACCELERATION TOGGLE SUBSYSTEM (--gpu / --disable-gpu / --enable-gpu)
+# ============================================================
+run_gpu_config() {
+  local action="${1:-status}"
+  local current_mode
+  current_mode="$(get_gpu_mode)"
+
+  local launcher_dynamic=false
+  if [ -f "/usr/local/bin/antigravity" ] && grep -q 'gpu-mode' /usr/local/bin/antigravity 2>/dev/null \
+     && [ -f "/usr/share/applications/antigravity.desktop" ] && grep -q '^Exec=/usr/local/bin/antigravity' /usr/share/applications/antigravity.desktop 2>/dev/null; then
+    launcher_dynamic=true
+  fi
+
+  case "$action" in
+    status)
+      echo "============================================================"
+      echo "       Antigravity 2.0 GPU Acceleration Configuration       "
+      echo "============================================================"
+      if [ "$current_mode" = "off" ]; then
+        echo -e "  Current mode:  ${C_YELLOW}${C_BOLD}DISABLED${C_RESET} (--disable-gpu)"
+      else
+        echo -e "  Current mode:  ${C_GREEN}${C_BOLD}ENABLED${C_RESET} (default)"
+      fi
+      echo -e "  Config file:   ${C_DIM}$GPU_MODE_FILE${C_RESET}"
+      if [ "$launcher_dynamic" = true ]; then
+        echo -e "  Launcher sync: ${C_GREEN}✓ Active${C_RESET} (applies to CLI and desktop icon on X11 & Wayland)"
+      elif [ -d "$HUB_DIR" ]; then
+        echo -e "  Launcher sync: ${C_YELLOW}⚠ Legacy launcher detected${C_RESET} — run ${C_BOLD}update-antigravity --repair${C_RESET} once to activate dynamic toggles"
+      fi
+      echo ""
+      echo "  Commands:"
+      echo "    update-antigravity --gpu off      Disable GPU acceleration (fixes high GPU/fan spikes)"
+      echo "    update-antigravity --gpu on       Re-enable GPU acceleration (default)"
+      echo "    update-antigravity --gpu status   Show current GPU setting"
+      echo "============================================================"
+      ;;
+    on|off)
+      mkdir -p "$GPU_CONFIG_DIR"
+      printf '%s\n' "$action" > "$GPU_MODE_FILE"
+      if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        chown -R "$ACTUAL_USER:" "$GPU_CONFIG_DIR" 2>/dev/null || true
+      fi
+
+      if [ "$action" = "off" ]; then
+        echo -e "${C_GREEN}✓ Antigravity 2.0 GPU acceleration: ${C_BOLD}DISABLED${C_RESET}${C_GREEN} (--disable-gpu)${C_RESET}"
+      else
+        echo -e "${C_GREEN}✓ Antigravity 2.0 GPU acceleration: ${C_BOLD}ENABLED${C_RESET}${C_GREEN} (default)${C_RESET}"
+      fi
+
+      if [ "$launcher_dynamic" = false ] && [ -d "$HUB_DIR" ]; then
+        if [ "$EUID" -eq 0 ]; then
+          write_hub_launcher_wrapper
+          write_hub_desktop_entry
+          if [ -n "${USER_HOME:-}" ] && [ -d "$USER_HOME/.local/bin" ]; then
+            rm -f "$USER_HOME/.local/bin/antigravity"
+            cp -f /usr/local/bin/antigravity "$USER_HOME/.local/bin/antigravity"
+            chown "$ACTUAL_USER:" "$USER_HOME/.local/bin/antigravity" 2>/dev/null || true
+          fi
+          if [ -n "${USER_HOME:-}" ] && [ -d "$USER_HOME/.local/share/applications" ]; then
+            cp -f /usr/share/applications/antigravity.desktop "$USER_HOME/.local/share/applications/antigravity.desktop"
+            chown "$ACTUAL_USER:" "$USER_HOME/.local/share/applications/antigravity.desktop" 2>/dev/null || true
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications 2>/dev/null || true
+          fi
+          echo "  ✓ Upgraded system launcher and desktop entry to support dynamic GPU toggling."
+        else
+          echo -e "  ${C_YELLOW}⚠ Note: Your installed launcher/desktop entry is from an older version.${C_RESET}"
+          echo -e "    Run ${C_BOLD}update-antigravity --repair${C_RESET} once so CLI and desktop icon launches honor --gpu toggles."
+        fi
+      fi
+      echo "  Restart Antigravity 2.0 for the change to take effect."
+      ;;
+    *)
+      echo -e "${C_RED}Invalid --gpu option: '$action'${C_RESET}"
+      echo "Usage: update-antigravity --gpu [on|off|status]"
+      exit 1
+      ;;
+  esac
+}
+
+# ============================================================
 # CLI PERMISSION SANITIZATION
 # ============================================================
 clean_legacy_permissions() {
@@ -1042,6 +1171,7 @@ PRUNE=false
 VERIFY_ONLY=false
 REPAIR_MODE=false
 FIX_PATH_MODE=false
+GPU_ACTION=""
 NO_GIT=false
 TARGET_HUB=true
 TARGET_IDE=true
@@ -1067,6 +1197,27 @@ while [ $# -gt 0 ]; do
       ;;
     --fix-path)
       FIX_PATH_MODE=true
+      shift
+      ;;
+    --gpu)
+      if [ $# -ge 2 ] && [[ "$2" != -* ]]; then
+        GPU_ACTION="$2"
+        shift 2
+      else
+        GPU_ACTION="status"
+        shift
+      fi
+      ;;
+    --gpu=*)
+      GPU_ACTION="${1#*=}"
+      shift
+      ;;
+    --disable-gpu)
+      GPU_ACTION="off"
+      shift
+      ;;
+    --enable-gpu)
+      GPU_ACTION="on"
       shift
       ;;
     env)
@@ -1117,6 +1268,7 @@ while [ $# -gt 0 ]; do
       echo "  -V, --verify, --doctor     Verify health & integrity of current installations"
       echo "      --repair, --fix        Automatically repair permissions, symlinks, and broken files"
       echo "      --fix-path             Add ~/.local/bin to shell profiles and launch refreshed shell"
+      echo "      --gpu [on|off|status]  Toggle Antigravity 2.0 GPU acceleration (aliases: --disable-gpu, --enable-gpu)"
       echo "  -p, --prune, --clean       Delete outdated cached tarballs and backup folders"
       echo "      --no-git, --skip-git   Skip automatic Git repository synchronization"
       echo "  -v, --version              Show script version ($SCRIPT_VERSION)"
@@ -1139,6 +1291,12 @@ done
 
 # Auto-sync updater script from Git repository before running any actions
 sync_git_repo "${ORIGINAL_ARGS[@]}"
+
+# If GPU mode toggle/status requested, handle immediately
+if [ -n "$GPU_ACTION" ]; then
+  run_gpu_config "$GPU_ACTION"
+  exit 0
+fi
 
 # If fix-path requested, run PATH configuration subsystem
 if [ "$FIX_PATH_MODE" = true ]; then
@@ -1654,34 +1812,9 @@ except Exception:
   # Launchers & Desktop file
   mkdir -p /usr/local/bin /usr/share/applications
 
-  # Create portable system launcher wrapper for terminal execution
-  # Explicitly remove pre-existing file or symlink to prevent writing through a symlink into $HUB_DIR/antigravity
-  rm -f /usr/local/bin/antigravity
-  cat << LAUNCHER_HUB_EOF > /usr/local/bin/antigravity
-#!/usr/bin/env bash
-# Antigravity Launcher Wrapper
-# Always disables GPU hardware acceleration and dynamically enables native Wayland flags
-EXTRA_FLAGS=($HUB_BASE_FLAGS)
-if [ -n "\${WAYLAND_DISPLAY:-}" ] || [ "\${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  EXTRA_FLAGS+=($HUB_WAYLAND_FLAGS)
-fi
-exec "$HUB_DIR/antigravity" "\${EXTRA_FLAGS[@]}" "\$@"
-LAUNCHER_HUB_EOF
-  chmod 755 /usr/local/bin/antigravity
-
-  cat << DESKTOP_HUB_EOF > /usr/share/applications/antigravity.desktop
-[Desktop Entry]
-Name=Antigravity
-Comment=Antigravity - Agentic Desktop Application
-Exec=$HUB_DIR/antigravity $HUB_DISPLAY_FLAGS %U
-Icon=antigravity
-Terminal=false
-Type=Application
-Categories=Development;IDE;
-StartupWMClass=Antigravity
-MimeType=x-scheme-handler/antigravity;
-Keywords=antigravity;ai;agent;gemini;code;ide;
-DESKTOP_HUB_EOF
+  # Create portable system launcher wrapper & desktop entry
+  write_hub_launcher_wrapper
+  write_hub_desktop_entry
 
   # User-level launchers and desktop entries
   if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
@@ -1696,6 +1829,10 @@ DESKTOP_HUB_EOF
   prune_old_archives "Antigravity" "$HUB_ARCHIVE"
 
   echo -e "${C_GREEN}✓ Antigravity 2.0 successfully updated to $HUB_LATEST!${C_RESET}"
+  if [ "$(get_gpu_mode)" = "off" ]; then
+    echo -e "${C_YELLOW}ℹ Note: GPU acceleration is currently DISABLED (--disable-gpu).${C_RESET}"
+    echo -e "  To test GPU acceleration on v$HUB_LATEST, run: ${C_BOLD}update-antigravity --gpu on${C_RESET}"
+  fi
 fi
 
 # ------------------------------------------------------------
