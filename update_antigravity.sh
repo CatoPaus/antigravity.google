@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.7"
+SCRIPT_VERSION="2.3.8"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -63,9 +63,11 @@ HUB_DIR="/opt/Antigravity"
 HUB_BACKUP_DIR="/opt/Antigravity.bak"
 IDE_DIR="/opt/Antigravity-IDE"
 IDE_BACKUP_DIR="/opt/Antigravity-IDE.bak"
-# Display flags: Automatically choose native Wayland when available to prevent
-# XWayland GPU render loops and continuous fan noise on Linux, while safely falling back to X11.
-HUB_DISPLAY_FLAGS="--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"
+# Display flags: Disable GPU hardware acceleration on both X11 and Wayland to prevent
+# AMD GPU clock locks and continuous fan noise on Linux, and enable native Wayland when available.
+HUB_BASE_FLAGS="--disable-gpu"
+HUB_WAYLAND_FLAGS="--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"
+HUB_DISPLAY_FLAGS="$HUB_BASE_FLAGS $HUB_WAYLAND_FLAGS"
 
 # 3. Check and Auto-Install Script Dependencies (curl, python3, tar, ca-certificates)
 MISSING_TOOLS=()
@@ -636,10 +638,10 @@ run_repair() {
   cat << LAUNCHER_HUB_EOF > /usr/local/bin/antigravity
 #!/usr/bin/env bash
 # Antigravity Launcher Wrapper
-# Dynamically resolves Wayland/X11 environment and passes optimal flags
-EXTRA_FLAGS=()
+# Always disables GPU hardware acceleration and dynamically enables native Wayland flags
+EXTRA_FLAGS=($HUB_BASE_FLAGS)
 if [ -n "\${WAYLAND_DISPLAY:-}" ] || [ "\${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  EXTRA_FLAGS+=($HUB_DISPLAY_FLAGS)
+  EXTRA_FLAGS+=($HUB_WAYLAND_FLAGS)
 fi
 exec "$HUB_DIR/antigravity" "\${EXTRA_FLAGS[@]}" "\$@"
 LAUNCHER_HUB_EOF
@@ -1658,10 +1660,10 @@ except Exception:
   cat << LAUNCHER_HUB_EOF > /usr/local/bin/antigravity
 #!/usr/bin/env bash
 # Antigravity Launcher Wrapper
-# Dynamically resolves Wayland/X11 environment and passes optimal flags
-EXTRA_FLAGS=()
+# Always disables GPU hardware acceleration and dynamically enables native Wayland flags
+EXTRA_FLAGS=($HUB_BASE_FLAGS)
 if [ -n "\${WAYLAND_DISPLAY:-}" ] || [ "\${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  EXTRA_FLAGS+=($HUB_DISPLAY_FLAGS)
+  EXTRA_FLAGS+=($HUB_WAYLAND_FLAGS)
 fi
 exec "$HUB_DIR/antigravity" "\${EXTRA_FLAGS[@]}" "\$@"
 LAUNCHER_HUB_EOF
