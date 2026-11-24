@@ -76,6 +76,7 @@ All selected Antigravity components are up to date.
 | `--force` | `-f` | | Force re-download and reinstall even if already at the latest version (useful for repairing corrupted installations). |
 | `--prune` | `-p` | `--clean` | Delete outdated cached tarballs from `~/Downloads` and remove `/opt/*.bak` folders. |
 | `--no-git` | | `--skip-git` | Bypass automatic Git repository synchronization on startup (or set `ANTIGRAVITY_NO_GIT=1`). |
+| `--no-apt` | | `--skip-apt` | Skip automatic system package maintenance (`apt-get update`, `upgrade -y`, `autoremove -y`) at the start of an update run (or set `ANTIGRAVITY_NO_APT=1`). |
 | `--version` | `-v` | | Display script version. |
 | `--hub` | | `--only-hub` | Target only **Antigravity 2.0 (Hub)** desktop application. |
 | `--ide` | | `--only-ide` | Target only **Antigravity IDE** code editor. |
@@ -103,8 +104,11 @@ update-antigravity --gpu status   # Check current GPU setting
 # Instantly load Antigravity PATH in your current terminal session:
 eval "$(update-antigravity env)"
 
-# Check if any updates are available across all components:
+# Check if any updates are available across all components (read-only, skips apt):
 update-antigravity --check
+
+# Update Antigravity bundle only without running system apt update/upgrade/autoremove:
+update-antigravity --no-apt
 
 # Target only the IDE (update if needed):
 update-antigravity --ide

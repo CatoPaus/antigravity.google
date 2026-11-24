@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="2.3.9"
+SCRIPT_VERSION="2.3.10"
 
 # Resolve canonical script path to safely re-execute across shells, directories, and sudo
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -1173,6 +1173,7 @@ REPAIR_MODE=false
 FIX_PATH_MODE=false
 GPU_ACTION=""
 NO_GIT=false
+NO_APT=false
 TARGET_HUB=true
 TARGET_IDE=true
 TARGET_CLI=true
@@ -1232,6 +1233,10 @@ while [ $# -gt 0 ]; do
       NO_GIT=true
       shift
       ;;
+    --no-apt|--skip-apt)
+      NO_APT=true
+      shift
+      ;;
     -v|--version)
       echo "update-antigravity version $SCRIPT_VERSION"
       exit 0
@@ -1271,6 +1276,7 @@ while [ $# -gt 0 ]; do
       echo "      --gpu [on|off|status]  Toggle Antigravity 2.0 GPU acceleration (aliases: --disable-gpu, --enable-gpu)"
       echo "  -p, --prune, --clean       Delete outdated cached tarballs and backup folders"
       echo "      --no-git, --skip-git   Skip automatic Git repository synchronization"
+      echo "      --no-apt, --skip-apt   Skip automatic system apt update, upgrade & autoremove"
       echo "  -v, --version              Show script version ($SCRIPT_VERSION)"
       echo "      --hub, --only-hub      Only check/update Antigravity 2.0"
       echo "      --ide, --only-ide      Only check/update Antigravity IDE"
@@ -1416,6 +1422,58 @@ prune_old_archives() {
     fi
   done
 }
+
+# Helper: Run system apt update, upgrade (-y), and autoremove (-y) at start of update runs
+run_system_apt_update() {
+  if [ "$NO_APT" = true ] || [ "${ANTIGRAVITY_NO_APT:-0}" = "1" ] || [ "${_ANTIGRAVITY_APT_DONE:-0}" = "1" ]; then
+    return 0
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "============================================================"
+  echo "           System Package Update (apt-get)                  "
+  echo "============================================================"
+
+  local apt_prefix=()
+  if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      echo "==> Prompting for sudo to update system packages..."
+      apt_prefix=(sudo env DEBIAN_FRONTEND=noninteractive)
+    else
+      echo -e "${C_YELLOW}⚠ Skipping apt update: root privileges or sudo required.${C_RESET}"
+      echo ""
+      return 0
+    fi
+  else
+    apt_prefix=(env DEBIAN_FRONTEND=noninteractive)
+  fi
+
+  echo "==> Running apt-get update..."
+  if ! "${apt_prefix[@]}" apt-get update; then
+    echo -e "${C_YELLOW}⚠ Warning: apt-get update reported errors; continuing with upgrade...${C_RESET}"
+  fi
+
+  echo ""
+  echo "==> Running apt-get upgrade -y..."
+  "${apt_prefix[@]}" apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" || \
+    echo -e "${C_YELLOW}⚠ Warning: apt-get upgrade finished with warnings.${C_RESET}"
+
+  echo ""
+  echo "==> Running apt-get autoremove -y..."
+  "${apt_prefix[@]}" apt-get autoremove -y || \
+    echo -e "${C_YELLOW}⚠ Warning: apt-get autoremove finished with warnings.${C_RESET}"
+
+  export _ANTIGRAVITY_APT_DONE=1
+  echo -e "${C_GREEN}✓ System packages updated.${C_RESET}"
+  echo ""
+}
+
+# Run system package maintenance at the start of normal update runs (skipped in --check / --repair / --no-apt)
+if [ "$CHECK_ONLY" = false ] && [ "$REPAIR_MODE" = false ]; then
+  run_system_apt_update
+fi
 
 echo "============================================================"
 echo "          Antigravity Suite Version Checker / Updater        "
@@ -1704,7 +1762,7 @@ if [ "$EUID" -ne 0 ]; then
   echo ""
   echo "==> Root privileges required to install updates to /opt."
   echo "    Prompting for sudo..."
-  exec sudo bash "$SCRIPT_PATH" --no-git "$@"
+  exec sudo bash "$SCRIPT_PATH" --no-git --no-apt ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 fi
 
 # Check available disk space (at least 1GB in /opt and download dir)
